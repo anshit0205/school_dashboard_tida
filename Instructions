@@ -1,0 +1,4 @@
+This is the dataset link : https://docs.google.com/spreadsheets/d/1EjKsHbytAAUKJjys7wwTjx3j5pX86orkgh4qv4oYDfc/edit?gid=1227348185#gid=1227348185
+you can add or remove entries from here
+
+To run the script, open the terminal and run the command : streamlit run script.py
