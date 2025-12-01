@@ -171,6 +171,16 @@ def calculate_retention_risk(days):
         return 'High'      # Due within 2 weeks - proactive outreach needed
     else:
         return 'Active'    # More than 2 weeks away
+def clean_phone_number(num):
+    """Keep only digits, normalise Indian mobile numbers to 91xxxxxxxxxx."""
+    if pd.isna(num) or str(num).strip() == "":
+        return ""
+    s = re.sub(r"\D", "", str(num))  # remove non-digits
+    # If it's a 10-digit mobile, prefix country code
+    if len(s) == 10:
+        s = "91" + s
+    return s
+    
 
 # ============= DATA LOADING =============
 @st.cache_data
@@ -296,11 +306,12 @@ def load_data(cache_bust: int):
 
         # Fill NaN values for text columns
         text_cols = ['Class', 'Activity Opted', 'Mode of Payment', 'Remarks',
-                     'School', 'Name of Parent', 'Name of Child']
+                     'School', 'Name of Parent', 'Name of Child',"Father's Number"]
         for col in text_cols:
             if col in df.columns:
                 df[col] = df[col].fillna('')
-
+        if "Father's Number" in df.columns:
+            df["Father's Number"] = df["Father's Number"].apply(clean_phone_number)
         return df
     
     except Exception as e:
@@ -914,6 +925,19 @@ action_df = filtered_df[
     (filtered_df['Retention Risk'].isin(['Critical', 'High'])) | 
     (filtered_df['Payment Status'] == 'Unpaid / Zero')
 ].copy()
+ 
+
+# --- Renewal reminder candidates: due soon and have phone number ---
+REMINDER_WINDOW_DAYS = 7 # change to 14 etc if you want
+
+if "Father's Number" in filtered_df.columns:
+    reminder_df = action_df[
+        (action_df['Days Until Renewal'].between(-500, REMINDER_WINDOW_DAYS, inclusive='both')) &
+        (action_df["Father's Number"].str.strip() != "")
+    ].copy()
+else:
+    reminder_df = pd.DataFrame()
+
 
 if not action_df.empty:
     display_cols = [
@@ -1003,9 +1027,58 @@ if not action_df.empty:
         file_name=f'action_required_{datetime.now().strftime("%Y%m%d")}.csv',
         mime='text/csv'
     )
+    st.markdown("#### 📲 Renewal Reminder Messages")
+
+    if not reminder_df.empty:
+        # Build a friendly message for each parent
+        def build_reminder(row):
+            parent = row.get('Name of Parent') or "Parent"
+            child = row.get('Name of Child') or "your child"
+            activity = row.get('Activity Opted') or "the enrolled activity"
+            renew_date = pd.to_datetime(row['Renewal Date']).strftime('%d-%b-%Y') if pd.notna(row['Renewal Date']) else "soon"
+            amount = row.get('Monthly Equivalent Fee', 0)
+            amount_txt = f"₹{amount:,.0f}" if pd.notna(amount) and amount > 0 else "the fees"
+
+            return (
+                f"Dear {parent}, this is a reminder from your activity centre. "
+                f"{child}'s {activity} package is due for renewal on {renew_date}. "
+                f"Please pay {amount_txt} to ensure uninterrupted classes. "
+                f"Thank you!"
+            )
+
+        reminder_df['Reminder Message'] = reminder_df.apply(build_reminder, axis=1)
+
+        # Columns to show / export
+        preview_cols = ["Father's Number", 'Name of Parent', 'Name of Child',
+                        'Activity Opted', 'Renewal Date', 'Days Until Renewal', 'Reminder Message']
+        preview_cols = [c for c in preview_cols if c in reminder_df.columns]
+
+        st.dataframe(
+            reminder_df[preview_cols].head(20),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # CSV for bulk-SMS / WhatsApp upload
+        reminder_csv = reminder_df[preview_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "📥 Download Reminder List (Phone + Message)",
+            data=reminder_csv,
+            file_name=f'renewal_reminders_{datetime.now().strftime("%Y%m%d")}.csv',
+            mime='text/csv'
+        )
+
+        st.caption(
+            f"Includes only students with renewal due in the next {REMINDER_WINDOW_DAYS} days "
+            "and a valid father's mobile number."
+        )
+    else:
+        st.info(
+            f"No students with a renewal due in the next {REMINDER_WINDOW_DAYS} days "
+            "and a valid father's number, based on current filters."
+        )
 else:
     st.success("✅ No immediate follow-up required based on current filters.")
-
 # ============= DETAILED ANALYTICS TABS =============
 st.markdown("---")
 st.markdown('<div class="section-header"><h2>📈 Detailed Analytics & Insights</h2></div>', unsafe_allow_html=True)
